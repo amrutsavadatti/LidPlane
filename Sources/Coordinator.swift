@@ -41,7 +41,7 @@ final class Coordinator {
         overlay.onError = { [weak self] message in self?.status = message; self?.onChange?() }
         observeLifecycle()
         sensor.start()
-        watchdog = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+        let watchdogTimer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 if !Self.sessionIsUnlocked {
@@ -52,6 +52,10 @@ final class Coordinator {
                 }
             }
         }
+        // The watchdog is what removes a stranded overlay, so it must keep
+        // running while the run loop is tracking menu or slider events.
+        RunLoop.main.add(watchdogTimer, forMode: .common)
+        watchdog = watchdogTimer
     }
 
     private func observe(_ center: NotificationCenter, _ name: Notification.Name, _ action: @escaping () -> Void) {
@@ -150,7 +154,9 @@ final class Coordinator {
         stopPreview()
         previewing = true
         tracker.reset()
-        overlay.begin(delta: 0)
+        // A preview holds one frozen frame at a fixed delta, so it must bypass
+        // the overlay's late-capture motion check.
+        overlay.begin(delta: 0, requiresMotion: false)
         status = "Preview — stop to return to the live desktop"
         onChange?()
     }
@@ -165,7 +171,7 @@ final class Coordinator {
         guard previewing else { return }
         var startedAt: CFTimeInterval?
         let requestedAt = CACurrentMediaTime()
-        previewTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
+        let playTimer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
             MainActor.assumeIsolated {
                 guard let self else { timer.invalidate(); return }
                 let now = CACurrentMediaTime()
@@ -189,6 +195,8 @@ final class Coordinator {
                 }
             }
         }
+        RunLoop.main.add(playTimer, forMode: .common)
+        previewTimer = playTimer
     }
 
     func stopPreview() {
