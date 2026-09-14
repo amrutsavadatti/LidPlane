@@ -210,7 +210,7 @@ those are generated rather than typed.
   while a frozen image is on screen.
 - No launch-at-login, updater, or notarization.
 
-## Licence and liability
+## Licence
 
-A hobby project, shared as-is. No warranty, and no liability for how it behaves
-on your machine. Fork it and improve it.
+[MIT](LICENSE). A hobby project, shared as-is — no warranty, and no liability
+for how it behaves on your machine. Fork it and improve it.
