@@ -21,6 +21,8 @@ final class Coordinator {
     private(set) var status = "Checking the lid sensor…"
     private(set) var angle: Double?
     private(set) var enabled = false
+    /// Set once ScreenCaptureKit refuses, cleared only by an explicit retry.
+    private(set) var captureBlocked = false
     private var tracker = MotionTracker()
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
     private var watchdog: Timer?
@@ -44,6 +46,7 @@ final class Coordinator {
             MainActor.assumeIsolated { self?.status = status; self?.onChange?() }
         }
         overlay.onError = { [weak self] message in self?.status = message; self?.onChange?() }
+        overlay.onCaptureRefused = { [weak self] message in self?.captureRefused(message) }
         observeLifecycle()
         sensor.start()
         let watchdogTimer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
@@ -112,6 +115,7 @@ final class Coordinator {
             return
         }
         stopEffect()
+        if value { captureBlocked = false }
         enabled = value
         config.effectEnabled = value
         ConfigStore.save(config)
@@ -147,7 +151,7 @@ final class Coordinator {
             lastStatusUpdate = time
             onChange?()
         }
-        guard enabled, !inSetup, !sessionSuspended, Self.sessionIsUnlocked else { return }
+        guard enabled, !captureBlocked, !inSetup, !sessionSuspended, Self.sessionIsUnlocked else { return }
         switch tracker.sample(angle: angle, time: time) {
         case .began(let reference, let current): overlay.begin(delta: scaledVisualDelta(reference: reference, current: current))
         case .changed(let delta):
@@ -198,6 +202,31 @@ final class Coordinator {
         config.calibration = value
         ConfigStore.save(config)
         tracker.reset()
+        onChange?()
+    }
+
+    /// ScreenCaptureKit refused. `CGPreflightScreenCaptureAccess` cannot be
+    /// trusted here — it happily reports `true` off stale state while capture
+    /// is actually denied — so this latch is the only reliable signal that the
+    /// effect cannot work.
+    ///
+    /// Turning the effect off is the point: leaving it armed means the next lid
+    /// movement raises another system permission prompt, and the one after
+    /// that, indefinitely.
+    private func captureRefused(_ message: String) {
+        captureBlocked = true
+        enabled = false
+        config.effectEnabled = false
+        ConfigStore.save(config)
+        tracker.reset()
+        overlay.cancel()
+        status = "Screen Recording was refused. Re-grant it, then switch the effect back on."
+        onChange?()
+    }
+
+    /// Clears the latch so one capture can be attempted again.
+    func retryCapture() {
+        captureBlocked = false
         onChange?()
     }
 

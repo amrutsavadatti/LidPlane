@@ -80,6 +80,22 @@ certificate exists.
 **Open question.** Whether to also do a Sparkle-style update mechanism, or
 treat this as a manually-downloaded versioned release for now.
 
+### Decided: ship without an Apple account
+
+No Developer Program for now. Users will hit the Gatekeeper block and need the
+"Open Anyway" path through System Settings.
+
+- [ ] **Amrut is building a web page explaining the Open Anyway flow**, with
+  screenshots. Remind him about this. It has to live on the website, not in the
+  app: the app cannot open to show a guide when opening is the thing being
+  blocked.
+- [ ] Sign every release with the *same* self-signed certificate. It does
+  nothing for Gatekeeper, but without it each release has a new cdhash and
+  users must re-grant Screen Recording on every update. With it the designated
+  requirement is `identifier + certificate leaf`, so they grant once.
+- [ ] Optional: DMG background image carrying the install steps, since that is
+  readable before first launch.
+
 ---
 
 ## Uncommitted work currently on `master`

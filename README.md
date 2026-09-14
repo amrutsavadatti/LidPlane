@@ -3,6 +3,53 @@
 A native macOS menu-bar app for Amrut's M4 MacBook Air (macOS Tahoe 26.3).
 Written independently in Swift, AppKit, ScreenCaptureKit, and Metal. No third-party dependencies.
 
+## First-time setup
+
+```sh
+./setup-dev.sh
+```
+
+Run this once before anything else. It walks you through creating a self-signed
+code-signing certificate, then rebuilds, verifies the signature, and clears any
+stale Screen Recording grant.
+
+It matters more than it sounds. An ad-hoc signature (`codesign --sign -`) makes
+the app's designated requirement its own `cdhash`, so **every rebuild is a
+different app as far as TCC is concerned** and the Screen Recording grant stops
+matching. The symptom is a permission prompt on every single lid movement. With
+a stable certificate the requirement becomes:
+
+```
+identifier "local.amrut.LidPlane" and certificate leaf = H"…"
+```
+
+which survives rebuilds, so you approve the permission once.
+
+No Apple Developer Program is involved. A self-signed certificate is untrusted —
+`security find-identity -v` will not list it — but `codesign` signs with it
+perfectly well. Only Gatekeeper cares about trust, and Gatekeeper is not
+involved in a locally built app.
+
+On the first build after creating the certificate, macOS asks permission to use
+the signing key. Choose **Always Allow**; later builds are then silent.
+
+### The certificate expires after one year
+
+Certificate Assistant defaults to a one-year validity, and `setup-dev.sh` does
+not override it. When it lapses, `build.sh` fails to sign and the Screen
+Recording grant stops matching again, since the certificate leaf in the
+designated requirement no longer exists.
+
+The fix is to repeat the setup: create a fresh certificate with the same name,
+re-run `./setup-dev.sh`, and re-grant Screen Recording once. To avoid it
+entirely, tick **Let me override defaults** in Certificate Assistant and set the
+validity to something like 3650 days — it adds several wizard pages, which is
+why it is not the default advice here.
+
+The same applies to any release signed with that certificate: re-signing
+releases with a *different* certificate forces every user to re-grant Screen
+Recording, so keep one certificate for as long as possible.
+
 ## Run
 
 ```sh
@@ -10,15 +57,26 @@ bash build.sh
 open build/LidPlane.app
 ```
 
-In the app, choose **Allow Screen Recording…** and grant the macOS permission.
-Return to the app, choose **Refresh**, then enable **Respond to lid movement**.
-If macOS requests a relaunch, quit and reopen the app. Local ad-hoc signing can
-require renewed permission after rebuilding the executable.
+`build.sh` resolves a signing identity in this order: the
+`LIDPLANE_SIGN_IDENTITY` environment variable, then the `.signing-identity` file
+written by `setup-dev.sh`, then ad-hoc. It prints a warning whenever it falls
+back to ad-hoc.
 
-The app starts with the physical effect disabled. Closing its settings leaves
-the menu-bar app running. Reopen controls from its angle indicator, or relaunch
-the app. **Stop Effect** cancels the current gesture/preview. Escape also stops
-a preview while LidPlane's window is focused; it is not a global keyboard hook.
+The app has no Dock icon and no window. Everything lives in the menu bar:
+
+- **Left click** the icon for a popover with a single switch, plus the
+  calibrated lid range. The icon dims while the effect is off.
+- **Right click** for **Calibrate Lid…** and **Quit**. An `LSUIElement` app has
+  no Dock icon or app menu, so this is the only way to quit.
+- **Escape** cancels an effect in flight.
+
+On first launch it opens the setup walkthrough instead: Screen Recording,
+maximum open angle, visual cutoff angle, done. The switch position and the
+calibration are remembered between launches.
+
+If Screen Recording is refused, the effect switches itself off and the popover
+shows a warning row. This is deliberate — leaving it armed means another system
+permission prompt on every lid movement.
 
 ## Behavior
 
@@ -36,14 +94,22 @@ a preview while LidPlane's window is focused; it is not a global keyboard hook.
 - Only the awake built-in display is used. Capture failures leave the live desktop visible.
 - Screenshots are never written to disk, uploaded, or reused across gestures.
 
-## Controls
+## Calibration
 
-- Enable/pause physical gestures from the menu or settings.
-- **Play Preview** demonstrates both signed directions with one frozen screenshot.
-- The slider previews −110° through +60°. Settings stay above the preview so controls remain usable.
-- **Fold and Sleep** runs an explicitly selected timed closing effect, then asks macOS to sleep.
-  It is never triggered automatically by lid movement.
-- Menu keyboard equivalents work when LidPlane is active; no system-wide shortcuts are registered.
+The hinge endpoints are measured per machine by the setup walkthrough and stored
+in `~/Library/Application Support/LidPlane/config.json`:
+
+- **Maximum open angle** — how far back the lid physically travels.
+- **Visual cutoff angle** — where the screen stops being visible to the eye.
+  This lands well above 0°, and driving the effect below it would spend most of
+  the animation on travel nobody can see.
+
+The cutoff only remaps the physical endpoints. The ±200° visual range stays an
+artistic constant, so calibration changes *when* the effect happens rather than
+*how* it looks, and the blur tuning holds on every machine.
+
+Delete that file to get the walkthrough back, or use **Calibrate Lid…** from the
+menu bar. There is no preview or slider; the lid is the only input.
 
 ## Implementation boundaries to validate on hardware
 
@@ -84,9 +150,10 @@ The motion tests cover reference angles, signed deltas, reversals, the stillness
 timeout, new gestures, slow movement, jitter, and invalid readings. The probe
 checks actual HID readings without screen capture. The renderer check compiles
 the Metal shader at runtime, so full Xcode / the standalone Metal compiler is not required.
-`--calibrate` records the actual minimum and maximum values observed while you
-move the lid through its normal range; the animation should normalize against
-those device-specific endpoints rather than a hardcoded 200° assumption.
+`--calibrate` is a raw diagnostic that logs the minimum and maximum angles seen
+over fifteen seconds. It does not write any configuration — the in-app
+walkthrough is what actually calibrates the effect. Use this only to check what
+the sensor reports.
 
 Manual acceptance: adjust in each direction; close farther; reverse before stopping;
 hold still; start a second gesture; switch to an external display; lock/sleep during

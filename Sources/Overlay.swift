@@ -50,6 +50,10 @@ final class Overlay {
     /// four of them per gesture.
     private let ciContext = CIContext(options: nil)
     var onError: ((String) -> Void)?
+    /// Raised when ScreenCaptureKit itself refuses. Distinct from `onError`
+    /// because the only sane response is to stop arming the effect: every
+    /// retry is another permission prompt in the user's face.
+    var onCaptureRefused: ((String) -> Void)?
     private(set) var active = false
     private(set) var visible = false
     /// False for previews, which legitimately hold a still image at a fixed delta.
@@ -240,7 +244,15 @@ final class Overlay {
                 guard token == self.generation, !Task.isCancelled else { return }
                 self.content = nil
                 self.cancel()
-                self.onError?("Capture unavailable: \(error.localizedDescription)")
+                // PlaneError covers our own recoverable cases, such as the
+                // display changing mid-capture. Anything else came out of
+                // ScreenCaptureKit and almost always means the grant is
+                // missing or no longer matches this build's signature.
+                if error is PlaneError {
+                    self.onError?("Capture unavailable: \(error.localizedDescription)")
+                } else {
+                    self.onCaptureRefused?(error.localizedDescription)
+                }
             }
         }
     }

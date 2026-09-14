@@ -119,7 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let fixButton = NSButton(title: "Open Settings", target: self, action: #selector(openCaptureSettings))
         fixButton.bezelStyle = .accessoryBarAction
         fixButton.controlSize = .small
-        let warning = NSTextField(wrappingLabelWithString: "Screen Recording permission is needed.")
+        let warning = NSTextField(wrappingLabelWithString: "Screen Recording is blocked. Grant it, then switch the effect on again.")
         warning.font = .systemFont(ofSize: 11)
         warning.textColor = .secondaryLabelColor
         permissionRow.orientation = .horizontal
@@ -161,9 +161,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     @objc private func refresh() {
         guard let coordinator else { return }
-        let allowed = CGPreflightScreenCaptureAccess()
+        // Preflight reports true off stale state while capture is actually
+        // refused, so the latch has to be consulted alongside it.
+        let allowed = CGPreflightScreenCaptureAccess() && !coordinator.captureBlocked
         effectSwitch.state = coordinator.enabled ? .on : .off
-        effectSwitch.isEnabled = allowed
         permissionRow.isHidden = allowed
         let calibration = coordinator.calibration
         subtitleLabel.stringValue = calibration.recordedAt == Date.distantPast
@@ -180,6 +181,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     @objc private func openCaptureSettings() {
+        coordinator?.retryCapture()
         if !CGRequestScreenCaptureAccess(),
            let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
             NSWorkspace.shared.open(url)
