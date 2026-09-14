@@ -7,7 +7,11 @@ freezes the display, tilts that frozen image back from the hinge, and softens
 its far edge into nothing — then returns you to the live desktop the moment you
 stop moving.
 
-**[Download the latest release →](https://github.com/amrutsavadatti/LidPlane/releases)**
+**[Download and install →](https://amrutsavadatti.github.io/getLidPlane/)**
+
+The download page walks through the one-time Open Anyway step with screenshots.
+If you just want the file, it is attached to every
+[release](https://github.com/amrutsavadatti/LidPlane/releases).
 
 Requires macOS 14 or later on an Apple Silicon MacBook. It reads the built-in
 lid-angle sensor, so it does nothing on a desktop Mac.
@@ -211,13 +215,16 @@ bash package.sh
 
 Builds, refuses to continue if the app is ad-hoc signed, stages a disk image
 with a drag-install symlink and a Finder-styled window, and writes
-`dist/LidPlane-<version>.dmg`.
+`dist/LidPlane.dmg`, then prints the SHA-256.
 
-If a `Website/` directory is present — or `LIDPLANE_SITE_DIR` points at one — it
-also copies the image there and rewrites the download link, version, size and
-SHA-256 in `index.html`. A stale checksum on a page whose job is convincing
-people an unsigned-looking app is safe is worse than having none at all, so
-those are generated rather than typed.
+Publish it as a GitHub Release tagged `v<version>`, attaching the file as
+exactly `LidPlane.dmg` with the checksum in the notes. The name carries no
+version on purpose: the download page links to
+`releases/latest/download/LidPlane.dmg`, which only resolves when every release
+uses the same asset name.
+
+If a `Website/` directory is present — or `LIDPLANE_SITE_DIR` points at one —
+`package.sh` also rewrites the version and size shown under its download button.
 
 ## Known limitations
 

@@ -18,10 +18,11 @@ cd "$(dirname "$0")"
 APP="build/LidPlane.app"
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist)"
 OUT_DIR="dist"
-DMG="$OUT_DIR/LidPlane-$VERSION.dmg"
+DMG="$OUT_DIR/LidPlane.dmg"
 STAGING="$(mktemp -d)"
 # The download page is a separate repository. It lives alongside by default;
-# point LIDPLANE_SITE_DIR elsewhere if you move it.
+# point LIDPLANE_SITE_DIR elsewhere if you move it. Only its version and size
+# text is touched; the disk image itself goes to GitHub Releases.
 SITE_DIR="${LIDPLANE_SITE_DIR:-Website}"
 trap 'rm -rf "$STAGING"' EXIT
 
@@ -137,19 +138,21 @@ SHA="$(shasum -a 256 "$DMG" | cut -d' ' -f1)"
 printf '\nWrote %s (%s)\n' "$DMG" "$SIZE"
 printf 'SHA-256: %s\n' "$SHA"
 
-# Keep the download page in step with the build. A stale link or checksum on a
-# page whose whole job is convincing people the app is safe is worse than none.
-if [ -d "$SITE_DIR" ]; then
-    mkdir -p "$SITE_DIR/downloads"
-    rm -f "$SITE_DIR"/downloads/LidPlane-*.dmg
-    cp "$DMG" "$SITE_DIR/downloads/"
+# The disk image is hosted as a GitHub Release asset, not in the website repo.
+# The site links to releases/latest/download/LidPlane.dmg, which only resolves if
+# every release attaches a file with exactly that name — hence no version in it.
+# Version and size on the page are still generated here rather than typed.
+if [ -f "$SITE_DIR/index.html" ]; then
     /usr/bin/sed -i '' \
-        -e "s|downloads/LidPlane-[0-9.]*\.dmg|downloads/LidPlane-$VERSION.dmg|g" \
         -e "s|Version [0-9.]* · [^·]*· macOS|Version $VERSION · $SIZE · macOS|g" \
-        -e "s|SHA-256 of LidPlane-[0-9.]*\.dmg|SHA-256 of LidPlane-$VERSION.dmg|g" \
-        -e "s|^           [0-9a-f]\{64\}</p>|           $SHA</p>|" \
         "$SITE_DIR/index.html"
-    printf 'Updated %s/ with the new build, version, size and checksum.\n' "$SITE_DIR"
+    printf 'Updated version and size in %s/index.html.\n' "$SITE_DIR"
 fi
 
-printf '\nUsers must follow the Open Anyway steps in the disk image.\n'
+cat <<EOF
+
+Next, publish the release on GitHub:
+  tag:     v$VERSION
+  asset:   $DMG   (upload as LidPlane.dmg — do not rename it)
+  notes:   SHA-256 $SHA
+EOF
