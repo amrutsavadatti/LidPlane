@@ -3,11 +3,17 @@ import IOKit.pwr_mgt
 
 @MainActor
 final class Coordinator {
-    // Calibrated on the user's M4 MacBook Air: fully closed -> fully open.
-    // These are sensor endpoints, not the visual animation range.
-    private let closedLidAngle = 0.0
-    private let openLidAngle = 128.0
+    // Sensor endpoints, measured per machine by the setup walkthrough. The
+    // visual range below is deliberately not calibrated: it is an artistic
+    // constant describing how much travel a full gesture is worth, so the blur
+    // and dissolve tuning stays valid on every laptop.
+    private(set) var calibration = CalibrationStore.load() ?? .fallback
     private let fullVisualRange = 200.0
+    /// True while the setup walkthrough owns the screen. Lid movement must not
+    /// raise the overlay on top of the instructions the user is reading.
+    private(set) var inSetup = false
+    /// Every valid sensor reading, for the walkthrough's live angle display.
+    var onAngle: ((Double) -> Void)?
     let sensor = LidSensor()
     let overlay: Overlay
     var onChange: (() -> Void)?
@@ -119,11 +125,12 @@ final class Coordinator {
         guard CACurrentMediaTime() - time < 0.15 else { return }
         self.angle = angle
         lastSample = time
+        onAngle?(angle)
         if time - lastStatusUpdate >= 0.1 {
             lastStatusUpdate = time
             onChange?()
         }
-        guard enabled, !previewing, !sessionSuspended, Self.sessionIsUnlocked else { return }
+        guard enabled, !previewing, !inSetup, !sessionSuspended, Self.sessionIsUnlocked else { return }
         switch tracker.sample(angle: angle, time: time) {
         case .began(let reference, let current): overlay.begin(delta: scaledVisualDelta(reference: reference, current: current))
         case .changed(let delta):
@@ -140,13 +147,40 @@ final class Coordinator {
     /// toward the keyboard; positive means opening away from it.
     private func scaledVisualDelta(reference: Double, current: Double) -> Double {
         if current < reference {
-            let available = max(reference - closedLidAngle, 0.001)
+            let available = max(reference - calibration.cutoffAngle, 0.001)
             let progress = min(1.0, max(0.0, (reference - current) / available))
             return -progress * fullVisualRange
         }
-        let available = max(openLidAngle - reference, 0.001)
+        let available = max(calibration.openAngle - reference, 0.001)
         let progress = min(1.0, max(0.0, (current - reference) / available))
         return progress * fullVisualRange
+    }
+
+    /// Suspends lid-driven effects while the walkthrough is on screen.
+    func beginSetup() {
+        inSetup = true
+        stopPreview()
+        overlay.cancel()
+        tracker.reset()
+    }
+
+    func endSetup(enableEffect: Bool) {
+        inSetup = false
+        tracker.reset()
+        CalibrationStore.hasCompletedSetup = true
+        if enableEffect, CGPreflightScreenCaptureAccess() {
+            setEnabled(true)
+        } else {
+            onChange?()
+        }
+    }
+
+    func applyCalibration(_ value: Calibration) {
+        guard value.isUsable else { return }
+        calibration = value
+        CalibrationStore.save(value)
+        tracker.reset()
+        onChange?()
     }
 
     func beginPreview() {

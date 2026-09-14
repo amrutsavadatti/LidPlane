@@ -9,10 +9,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let statusLabel = NSTextField(wrappingLabelWithString: "Starting…")
     private let permissionLabel = NSTextField(labelWithString: "Screen Recording: checking")
     private let enableButton = NSButton(checkboxWithTitle: "Respond to lid movement", target: nil, action: nil)
+    private let calibrationLabel = NSTextField(labelWithString: "Lid range: —")
     private let slider = NSSlider(value: 0, minValue: -200, maxValue: 200, target: nil, action: nil)
     private let deltaLabel = NSTextField(labelWithString: "Preview visual range: 0°")
     private var effectMenuItem: NSMenuItem?
     private var eventMonitor: Any?
+    private var setup: SetupWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         do {
@@ -36,7 +38,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return event
         }
         refresh()
-        showSettings()
+        // First launch goes straight into the walkthrough; the settings window
+        // would only be something to dismiss before the real starting point.
+        if CalibrationStore.hasCompletedSetup {
+            showSettings()
+        } else {
+            runSetup()
+        }
+    }
+
+    @objc private func runSetup() {
+        guard let coordinator, setup == nil else { return }
+        settings?.orderOut(nil)
+        let flow = SetupWindow(coordinator: coordinator)
+        flow.onFinish = { [weak self] in
+            MainActor.assumeIsolated {
+                self?.setup = nil
+                self?.refresh()
+                self?.showSettings()
+            }
+        }
+        setup = flow
+        flow.run()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -61,6 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         item.button?.toolTip = "LidPlane — lid-relative perspective"
         let menu = NSMenu()
         menu.addItem(menuItem("Open LidPlane…", #selector(showSettings)))
+        menu.addItem(menuItem("Calibrate Lid…", #selector(runSetup)))
         menu.addItem(.separator())
         let toggle = menuItem("Respond to Lid Movement", #selector(toggleFromMenu))
         effectMenuItem = toggle
@@ -119,6 +143,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         enableButton.target = self
         enableButton.action = #selector(toggleEnabled)
         root.addArrangedSubview(enableButton)
+        calibrationLabel.font = .systemFont(ofSize: 12)
+        calibrationLabel.textColor = .secondaryLabelColor
+        let calibrationRow = NSStackView(views: [calibrationLabel, button("Calibrate…", #selector(runSetup))])
+        calibrationRow.spacing = 10
+        root.addArrangedSubview(calibrationRow)
         let line = NSBox()
         line.boxType = .separator
         root.addArrangedSubview(line)
@@ -153,6 +182,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let allowed = CGPreflightScreenCaptureAccess()
         permissionLabel.stringValue = allowed ? "Screen Recording: allowed" : "Screen Recording: permission needed"
         enableButton.state = coordinator.enabled ? .on : .off
+        let calibration = coordinator.calibration
+        calibrationLabel.stringValue = calibration.recordedAt == Date.distantPast
+            ? "Lid range: not calibrated — using defaults"
+            : String(format: "Lid range: %.0f° open · fades out at %.0f°",
+                     calibration.openAngle, calibration.cutoffAngle)
         effectMenuItem?.state = coordinator.enabled ? .on : .off
         // During manual preview, keep the controls accessible above the image.
         settings?.level = coordinator.previewing ? NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1) : .normal

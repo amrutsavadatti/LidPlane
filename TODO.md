@@ -3,9 +3,12 @@
 Two independent pieces. They can ship in either order, but (1) is what makes the
 effect correct on someone else's MacBook, and (2) is what lets them get it.
 
+**Status:** (1) is built — `Calibration.swift`, `SetupWindow.swift`, and the
+`Coordinator` changes that consume the measured endpoints. (2) is parked.
+
 ---
 
-## 1. Per-laptop hinge calibration
+## 1. Per-laptop hinge calibration — DONE
 
 **Why.** `Coordinator` currently hardcodes the endpoints measured on one machine:
 
@@ -35,8 +38,10 @@ is key.
 against them instead of the constants, and offer a re-run for when the numbers
 feel wrong. Ship sane fallbacks so an uncalibrated launch still works.
 
-**Open question.** Whether the visual-cutoff angle should also shorten the
-`±200°` visual range or only remap the physical endpoints.
+**Resolved.** The cutoff only remaps the physical endpoints; the `±200°` visual
+range stays an artistic constant. Calibration therefore changes *when* the
+effect happens, not *how* it looks, so the blur and dissolve tuning holds on
+every machine.
 
 ---
 
