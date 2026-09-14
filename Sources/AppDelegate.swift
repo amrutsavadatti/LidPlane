@@ -18,16 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var eventMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        do {
-            coordinator = try Coordinator()
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = "LidPlane couldn’t start"
-            alert.informativeText = error.localizedDescription
-            alert.runModal()
-            NSApp.terminate(nil)
-            return
-        }
+        coordinator = Coordinator()
         buildStatusItem()
         buildPopover()
         coordinator?.onChange = { [weak self] in self?.refresh() }

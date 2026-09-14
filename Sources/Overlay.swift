@@ -2,6 +2,16 @@ import AppKit
 import CoreImage
 import ScreenCaptureKit
 
+/// Recoverable conditions the overlay raises for itself, as opposed to errors
+/// thrown out of ScreenCaptureKit. The distinction matters: these do not latch
+/// the effect off, capture refusals do.
+enum PlaneError: LocalizedError {
+    case unavailable(String)
+    var errorDescription: String? {
+        switch self { case .unavailable(let text): return text }
+    }
+}
+
 @MainActor
 final class Overlay {
     /// Blur radii, in source pixels, for the progressive defocus ladder. Each
@@ -26,7 +36,6 @@ final class Overlay {
     /// live desktop. Kept just inside `MotionTracker.stillnessSeconds`.
     private static let motionGracePeriod: CFTimeInterval = 0.18
 
-    let renderer: PlaneRenderer
     private let window: NSWindow
     private let stageView: NSView
     /// Carries the hinge-anchored perspective transform. Everything that must
@@ -62,7 +71,6 @@ final class Overlay {
     var delta: Double = 0 {
         didSet {
             if abs(delta - oldValue) > 0.01 { lastMovementTime = CACurrentMediaTime() }
-            renderer.targetDelta = delta
             applyFallbackTransform()
         }
     }
@@ -74,8 +82,7 @@ final class Overlay {
         }
     }
 
-    init() throws {
-        renderer = try PlaneRenderer(frame: CGRect(x: 0, y: 0, width: 800, height: 500))
+    init() {
         window = NSWindow(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: false)
         window.isOpaque = true
         window.backgroundColor = .black
@@ -140,11 +147,6 @@ final class Overlay {
         sideFadeLayer.endPoint = CGPoint(x: 1.0, y: 0.5)
         sideFadeLayer.frame = stageView.bounds
         sideFadeLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
-        // Keep the native Metal view available for later GPU validation, but
-        // use the image-backed path for the visible prototype. This guarantees
-        // a capture cannot be replaced by a black CAMetalLayer while we tune
-        // the projection math on real hardware.
-        renderer.view.isHidden = true
         panelView.addSubview(imageView)
         for view in blurViews { panelView.addSubview(view) }
         panelView.layer?.mask = edgeDissolveLayer
@@ -181,7 +183,6 @@ final class Overlay {
         window.setFrame(screen.frame, display: false)
         let width = Int(screen.frame.width * screen.backingScaleFactor)
         let height = Int(screen.frame.height * screen.backingScaleFactor)
-        let fps = screen.maximumFramesPerSecond
         captureTask = Task { [weak self] in
             guard let self else { return }
             do {
@@ -219,9 +220,6 @@ final class Overlay {
                     self.cancel()
                     return
                 }
-                #if RENDER_TEST
-                RenderDiagnostics.inspect(image, renderer: self.renderer)
-                #endif
                 let size = NSSize(width: screen.frame.width, height: screen.frame.height)
                 let captured = NSImage(cgImage: image, size: size)
                 self.imageView.image = captured
@@ -235,7 +233,6 @@ final class Overlay {
                 }
                 self.imageView.isHidden = false
                 self.applyFallbackTransform()
-                try self.renderer.install(image, delta: self.delta, fps: fps)
                 self.window.alphaValue = 1
                 self.window.orderFrontRegardless()
                 self.visible = true
@@ -306,7 +303,6 @@ final class Overlay {
             view.isHidden = true
         }
         panelView.layer?.transform = CATransform3DIdentity
-        renderer.clear()
     }
 
     private func applyFallbackTransform() {

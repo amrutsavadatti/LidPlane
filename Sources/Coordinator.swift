@@ -37,8 +37,8 @@ final class Coordinator {
             && (session[kCGSessionOnConsoleKey as String] as? Bool == true)
     }
 
-    init() throws {
-        overlay = try Overlay()
+    init() {
+        overlay = Overlay()
         sensor.onSample = { [weak self] angle, time in
             MainActor.assumeIsolated { self?.sample(angle, time: time) }
         }

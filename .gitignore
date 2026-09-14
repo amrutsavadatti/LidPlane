@@ -2,3 +2,5 @@ build/
 .DS_Store
 .signing-identity
 dist/
+# The download page is its own repository, for GitHub Pages.
+Website/

@@ -4,9 +4,9 @@
 # The app is signed with a self-signed certificate, which Gatekeeper does not
 # trust, so a downloaded copy is blocked on first launch and the user has to go
 # through Privacy & Security > Open Anyway. That is the accepted trade for not
-# enrolling in the Apple Developer Program. Instructions ride along inside the
-# disk image, because the user cannot read anything in the app until they have
-# already got past the block.
+# enrolling in the Apple Developer Program. Those steps live on the download
+# page rather than in the image, since the user has to read them before the app
+# will open at all.
 #
 # Signing still matters even though it does not satisfy Gatekeeper: it fixes the
 # app's designated requirement to the certificate rather than the binary hash,
@@ -20,6 +20,9 @@ VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.p
 OUT_DIR="dist"
 DMG="$OUT_DIR/LidPlane-$VERSION.dmg"
 STAGING="$(mktemp -d)"
+# The download page is a separate repository. It lives alongside by default;
+# point LIDPLANE_SITE_DIR elsewhere if you move it.
+SITE_DIR="${LIDPLANE_SITE_DIR:-Website}"
 trap 'rm -rf "$STAGING"' EXIT
 
 printf '== Packaging LidPlane %s ==\n\n' "$VERSION"
@@ -49,40 +52,104 @@ printf 'Signature verifies.\n'
 cp -R "$APP" "$STAGING/"
 ln -s /Applications "$STAGING/Applications"
 
-cat > "$STAGING/Open Me First.txt" <<'EOF'
-LidPlane
-========
-
-1. Drag LidPlane to the Applications folder.
-
-2. Open Applications and double-click LidPlane.
-
-   macOS will refuse, saying it cannot verify the developer. This is
-   expected. LidPlane is signed, but not notarized by Apple, and macOS
-   blocks anything it has not seen notarized.
-
-3. Open System Settings > Privacy & Security.
-
-   Scroll down. There will be a message about LidPlane being blocked,
-   with an "Open Anyway" button. Click it.
-
-4. Double-click LidPlane again and choose Open.
-
-   You only have to do this once.
-
-On first launch LidPlane asks for Screen Recording permission and then
-measures your lid's hinge range. It freezes an image of your own display
-while the lid moves; nothing is written to disk or sent anywhere.
-
-LidPlane lives in the menu bar and has no window. Click its icon for the
-on/off switch, right-click for calibration and quit.
-EOF
+VOLNAME="LidPlane $VERSION"
+mkdir -p "$STAGING/.background"
+# Finder lays the background out by PIXEL count against the window's POINT
+# size, ignoring DPI entirely. So this image must be exactly 1000x500 pixels to
+# fill a 1000x500pt window. Two things that do not work: a 2x PNG tagged 144 DPI
+# (Finder shows a 1000x500 pixel corner of it), and `tiffutil -cathidpicheck`
+# (it drops the DPI and the 2x rep becomes a 2000x1000 POINT image). The cost is
+# a slightly soft background on Retina, which beats a cropped one.
+cp Resources/dmg-background.png "$STAGING/.background/background.png"
 
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
-hdiutil create -volname "LidPlane $VERSION" -srcfolder "$STAGING" \
-    -ov -format UDZO -quiet "$DMG"
 
-printf '\nWrote %s (%s)\n' "$DMG" "$(du -h "$DMG" | cut -f1)"
-printf 'SHA-256: %s\n' "$(shasum -a 256 "$DMG" | cut -d' ' -f1)"
+# Styling has to happen on a writable image: Finder stores the window geometry
+# and background in a .DS_Store, which cannot be written to a compressed one.
+# So build read-write, decorate, then convert.
+RW_DIR="$(mktemp -d)"
+RW_DMG="$RW_DIR/rw.dmg"
+SIZE_MB=$(( $(du -sk "$STAGING" | cut -f1) / 1024 + 40 ))
+hdiutil create -volname "$VOLNAME" -srcfolder "$STAGING" -ov \
+    -format UDRW -size "${SIZE_MB}m" -quiet "$RW_DMG"
+
+# A stale mount of the same name makes macOS append " 1" to the mount point, so
+# the path can never be assumed — read it back from attach instead.
+for stale in /Volumes/LidPlane*; do
+    [ -d "$stale" ] && hdiutil detach "$stale" -force -quiet 2>/dev/null || true
+done
+ATTACH="$(hdiutil attach "$RW_DMG" -readwrite -noverify -noautoopen)"
+MOUNT="$(printf '%s\n' "$ATTACH" | grep -o '/Volumes/.*$' | tail -1)"
+DEV="$(printf '%s\n' "$ATTACH" | grep '^/dev/' | head -1 | awk '{print $1}')"
+MOUNTED_NAME="$(basename "$MOUNT")"
+
+# Finder automation needs an Automation permission grant, and a headless or
+# locked session cannot show that prompt. A plain disk image still installs
+# perfectly well, so a failure here is cosmetic and must not fail the build.
+printf 'Styling the disk-image window…\n'
+if osascript >/dev/null 2>&1 <<APPLESCRIPT
+tell application "Finder"
+    tell disk "$MOUNTED_NAME"
+        open
+        set current view of container window to icon view
+        set toolbar visible of container window to false
+        set statusbar visible of container window to false
+        set the bounds of container window to {160, 120, 1160, 648}
+        set opts to the icon view options of container window
+        set arrangement of opts to not arranged
+        set icon size of opts to 118
+        set text size of opts to 13
+        set background picture of opts to file ".background:background.png"
+        set position of item "LidPlane.app" of container window to {260, 290}
+        set position of item "Applications" of container window to {740, 290}
+        update without registering applications
+        delay 1
+        close
+        open
+        set toolbar visible of container window to false
+        set statusbar visible of container window to false
+        set the bounds of container window to {160, 120, 1160, 648}
+        update without registering applications
+        delay 1
+    end tell
+end tell
+APPLESCRIPT
+then
+    printf 'Window styled.\n'
+else
+    printf 'Could not style the window (Finder automation unavailable).\n'
+    printf 'The disk image is still valid, just unstyled.\n'
+fi
+
+sync
+# Detach by device node; it survives a renamed or busy mount point. Never let a
+# stubborn unmount fail the build after the image itself is sound.
+hdiutil detach "$DEV" -quiet 2>/dev/null \
+    || hdiutil detach "$DEV" -force -quiet 2>/dev/null \
+    || true
+hdiutil convert "$RW_DMG" -format UDZO -imagekey zlib-level=9 -ov -quiet -o "$DMG"
+rm -rf "$RW_DIR"
+
+SIZE="$(du -h "$DMG" | cut -f1 | tr -d ' ' | sed -e 's/M$/ MB/' -e 's/K$/ KB/')"
+SHA="$(shasum -a 256 "$DMG" | cut -d' ' -f1)"
+
+printf '\nWrote %s (%s)\n' "$DMG" "$SIZE"
+printf 'SHA-256: %s\n' "$SHA"
+
+# Keep the download page in step with the build. A stale link or checksum on a
+# page whose whole job is convincing people the app is safe is worse than none.
+if [ -d "$SITE_DIR" ]; then
+    mkdir -p "$SITE_DIR/downloads"
+    rm -f "$SITE_DIR"/downloads/LidPlane-*.dmg
+    cp "$DMG" "$SITE_DIR/downloads/"
+    /usr/bin/sed -i '' \
+        -e "s|downloads/LidPlane-[0-9.]*\.dmg|downloads/LidPlane-$VERSION.dmg|g" \
+        -e "s|Version [0-9.]* · [^·]*· macOS|Version $VERSION · $SIZE · macOS|g" \
+        -e "s|SHA-256 of LidPlane-[0-9.]*\.dmg|SHA-256 of LidPlane-$VERSION.dmg|g" \
+        -e "s|^           [0-9a-f]\{64\}</p>|           $SHA</p>|" \
+        "$SITE_DIR/index.html"
+    printf 'Updated %s/ with the new build, version, size and checksum.\n' "$SITE_DIR"
+fi
+
 printf '\nUsers must follow the Open Anyway steps in the disk image.\n'

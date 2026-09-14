@@ -2,16 +2,13 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p build/module-cache build/LidPlane.app/Contents/{MacOS,Resources}
-task_flags=()
-if [ "${1:-}" = "--diagnostics" ]; then task_flags=(-D RENDER_TEST); fi
-xcrun swiftc -swift-version 5 -O ${task_flags[@]+"${task_flags[@]}"} -module-cache-path "$PWD/build/module-cache" \
+xcrun swiftc -swift-version 5 -O -module-cache-path "$PWD/build/module-cache" \
     -target arm64-apple-macos14.0 Sources/*.swift \
     -o build/LidPlane.app/Contents/MacOS/LidPlane
 # Derived, never hardcoded: a codesign identifier that disagrees with
 # CFBundleIdentifier breaks TCC matching in ways that are hard to spot.
 BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' Info.plist)"
 cp Info.plist build/LidPlane.app/Contents/Info.plist
-cp Resources/Plane.metal build/LidPlane.app/Contents/Resources/Plane.metal
 cp Resources/AppIcon.icns build/LidPlane.app/Contents/Resources/AppIcon.icns
 # An ad-hoc signature ("-") makes the designated requirement the binary's own
 # cdhash, so every rebuild is a brand new app as far as TCC is concerned and the

@@ -35,19 +35,8 @@ if CommandLine.arguments.contains("--calibrate") {
         exit(1)
     }
     print(String(format: "Observed sensor range: %.2f° through %.2f° (%d samples)", minimum, maximum, readings))
-    print("Use these measured endpoints for the animation normalization; do not assume a universal 200° range.")
+    print("This is a raw sensor reading only. The in-app walkthrough is what calibrates the effect.")
     exit(0)
-}
-
-if CommandLine.arguments.contains("--validate-renderer") {
-    do {
-        let renderer = try PlaneRenderer(frame: CGRect(x: 0, y: 0, width: 640, height: 400))
-        print("Runtime Metal shader compiled; GPU: \(renderer.view.device?.name ?? "unknown")")
-        exit(0)
-    } catch {
-        print("Renderer validation failed: \(error)")
-        exit(1)
-    }
 }
 
 MainActor.assumeIsolated {
