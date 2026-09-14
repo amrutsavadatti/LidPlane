@@ -25,29 +25,68 @@ struct Calibration: Codable, Equatable {
     }
 }
 
-/// Calibration lives in UserDefaults; it is two numbers and a date, and it
-/// should survive app updates without the user thinking about it.
-enum CalibrationStore {
-    private static let key = "calibration.v1"
-    private static let completedKey = "setup.completed.v1"
+/// Everything the app remembers between launches.
+struct AppConfig: Codable {
+    var calibration: Calibration?
+    var setupCompleted: Bool
+    /// A menu-bar app with a single switch has to come back in the state the
+    /// user left it in; otherwise the effect silently turns itself off on
+    /// every login.
+    var effectEnabled: Bool
 
-    static func load() -> Calibration? {
-        guard let data = UserDefaults.standard.data(forKey: key),
-              let value = try? JSONDecoder().decode(Calibration.self, from: data),
-              value.isUsable else { return nil }
-        return value
+    static let empty = AppConfig(calibration: nil, setupCompleted: false, effectEnabled: false)
+}
+
+/// Config lives as readable JSON in Application Support rather than in the
+/// preferences domain, so it can be inspected, backed up, and deleted on its
+/// own without touching anything else the app might store.
+enum ConfigStore {
+    /// Retained only to migrate anyone who calibrated before the move.
+    private static let legacyCalibrationKey = "calibration.v1"
+    private static let legacyCompletedKey = "setup.completed.v1"
+
+    static var directory: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
+        return base.appendingPathComponent("LidPlane", isDirectory: true)
     }
 
-    static func save(_ calibration: Calibration) {
-        guard let data = try? JSONEncoder().encode(calibration) else { return }
-        UserDefaults.standard.set(data, forKey: key)
+    static var fileURL: URL { directory.appendingPathComponent("config.json") }
+
+    static func load() -> AppConfig {
+        if let data = try? Data(contentsOf: fileURL),
+           var config = try? JSONDecoder().decode(AppConfig.self, from: data) {
+            if let calibration = config.calibration, !calibration.isUsable { config.calibration = nil }
+            return config
+        }
+        if let migrated = migrateFromDefaults() {
+            save(migrated)
+            return migrated
+        }
+        return .empty
     }
 
-    /// Tracked separately from the calibration itself, so that someone who
-    /// finishes setup on a Mac with no usable sensor is not walked through it
-    /// again on every launch.
-    static var hasCompletedSetup: Bool {
-        get { UserDefaults.standard.bool(forKey: completedKey) }
-        set { UserDefaults.standard.set(newValue, forKey: completedKey) }
+    static func save(_ config: AppConfig) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(config) else { return }
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try? data.write(to: fileURL, options: .atomic)
+    }
+
+    /// One-time lift of the UserDefaults-era values so an existing install does
+    /// not have to run the walkthrough again.
+    private static func migrateFromDefaults() -> AppConfig? {
+        let defaults = UserDefaults.standard
+        let completed = defaults.bool(forKey: legacyCompletedKey)
+        var calibration: Calibration?
+        if let data = defaults.data(forKey: legacyCalibrationKey),
+           let decoded = try? JSONDecoder().decode(Calibration.self, from: data), decoded.isUsable {
+            calibration = decoded
+        }
+        guard completed || calibration != nil else { return nil }
+        defaults.removeObject(forKey: legacyCalibrationKey)
+        defaults.removeObject(forKey: legacyCompletedKey)
+        return AppConfig(calibration: calibration, setupCompleted: completed, effectEnabled: false)
     }
 }
