@@ -140,10 +140,32 @@ and blur progress measured against 90 visual degrees rather than the full 200,
 so the whole ramp lands inside the travel that is actually visible. The
 perspective transform stays symmetric.
 
-All per-sample updates run inside a `CATransaction` with actions disabled.
-Every gradient is rewritten at sensor rate, and each implicit CALayer animation
-would otherwise start a quarter-second interpolation, leaving the blur bands
-lagging the panel they are glued to.
+**Motion.** The lid sensor reports whole degrees — `readAngle` builds a `UInt16`
+with no fractional part — and with roughly 100° of physical travel mapped onto
+±200° of visual range, each 1° step lands as about 2° of animation. Rendering
+those steps as they arrive made the effect feel like the lid being shoved rather
+than gliding.
+
+So rendering is decoupled from sampling. The sensor sets a target; a
+`CADisplayLink` eases the drawn angle toward it at the screen's refresh rate,
+using `1 - exp(-dt / tau)` so the motion is identical on 60 Hz and 120 Hz
+panels. One sensor step is spread over roughly sixteen frames with a shrinking
+increment. `smoothingTau` is the dial: raising it smooths harder but the image
+visibly trails the physical lid, and that lag breaks the illusion faster than
+the jitter does.
+
+This masks the quantisation rather than removing it. No amount of easing
+recovers detail the sensor never sampled. The next lever, if it is ever needed,
+is velocity-adaptive smoothing — heavier easing when the lid is barely moving,
+lighter when it is swinging.
+
+The crossfade out rides the same display link, so the image keeps settling
+toward its final angle while it dissolves instead of freezing mid-motion.
+
+All per-frame updates run inside a `CATransaction` with actions disabled. Every
+gradient is rewritten each frame, and each implicit CALayer animation would
+otherwise start a quarter-second interpolation, leaving the blur bands lagging
+the panel they are glued to.
 
 ## Calibration
 

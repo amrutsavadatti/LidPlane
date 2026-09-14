@@ -31,6 +31,17 @@ final class Overlay {
     /// actually gets seen. This deliberately does not touch the perspective
     /// transform, which stays mapped across the full ±200 range.
     private static let closingBlurFullScale = 90.0
+    /// Time constant for easing the rendered angle toward the sensor's. The lid
+    /// sensor reports whole degrees, and with ~100° of physical travel mapped
+    /// onto ±200° of visual range each 1° step lands as roughly 2° of animation.
+    /// Rendering those steps directly is what made the effect feel like the lid
+    /// being shoved rather than gliding. Raising this smooths harder but adds
+    /// visible lag behind the physical lid, which breaks the illusion faster
+    /// than the jitter does.
+    private static let smoothingTau: CFTimeInterval = 0.055
+    /// Below this the eased value is snapped and the loop can idle.
+    private static let settleEpsilon = 0.02
+    private static let fadeSeconds: CFTimeInterval = 0.14
     /// How stale the last delta change may be when a capture lands. A gesture
     /// that has already gone still must not drop a frozen screenshot over the
     /// live desktop. Kept just inside `MotionTracker.stillnessSeconds`.
@@ -52,7 +63,14 @@ final class Overlay {
     private let sideFadeLayer: CAGradientLayer
     private var generation = 0
     private var captureTask: Task<Void, Never>?
-    private var fadeTimer: Timer?
+    /// Rendering runs off a display link rather than the sensor callback, so the
+    /// animation is resampled at the screen's refresh rate instead of inheriting
+    /// the sensor's 60 Hz quantised steps.
+    private var displayLink: CADisplayLink?
+    private var lastTick: CFTimeInterval = 0
+    private var fadeStart: CFTimeInterval?
+    /// What is actually drawn; eases toward `delta`.
+    private var visibleDelta: Double = 0
     private var content: SCShareableContent?
     private var contentDate = Date.distantPast
     /// Building a CIContext per call is expensive and the blur ladder needs
@@ -68,10 +86,14 @@ final class Overlay {
     /// False for previews, which legitimately hold a still image at a fixed delta.
     private var requiresMotion = true
     private var lastMovementTime: CFTimeInterval = 0
+    /// The angle the lid is at. Treated as a target: the display link eases
+    /// `visibleDelta` toward it rather than snapping the transform here.
     var delta: Double = 0 {
         didSet {
-            if abs(delta - oldValue) > 0.01 { lastMovementTime = CACurrentMediaTime() }
-            applyFallbackTransform()
+            if abs(delta - oldValue) > 0.01 {
+                lastMovementTime = CACurrentMediaTime()
+                resumeTicking()
+            }
         }
     }
 
@@ -178,6 +200,8 @@ final class Overlay {
         self.requiresMotion = requiresMotion
         self.lastMovementTime = CACurrentMediaTime()
         self.delta = delta
+        // Snap rather than easing in from the previous gesture's angle.
+        self.visibleDelta = delta
         let token = generation
         // Establish the destination before capturing; never fall back to an external display.
         window.setFrame(screen.frame, display: false)
@@ -260,21 +284,11 @@ final class Overlay {
         captureTask?.cancel()
         captureTask = nil
         guard visible else { cancel(); return }
-        let start = CACurrentMediaTime()
-        fadeTimer?.invalidate()
-        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
-            MainActor.assumeIsolated {
-                guard let self else { timer.invalidate(); return }
-                let progress = min(1, (CACurrentMediaTime() - start) / 0.14)
-                self.window.alphaValue = 1 - progress
-                if progress >= 1 { self.cancel() }
-            }
-        }
-        // Default-mode timers are suspended while the run loop is tracking
-        // events, which would strand a half-faded screenshot on screen for as
-        // long as a menu or slider drag lasts.
-        RunLoop.main.add(timer, forMode: .common)
-        fadeTimer = timer
+        // The fade rides the same display link as the easing, so the image keeps
+        // settling toward its final angle while it dissolves instead of freezing
+        // mid-motion.
+        fadeStart = CACurrentMediaTime()
+        resumeTicking()
         // Dispatch work runs in every run loop mode, so this is the backstop
         // that guarantees teardown even if the fade timer never fires.
         let token = generation
@@ -290,8 +304,7 @@ final class Overlay {
         generation += 1
         captureTask?.cancel()
         captureTask = nil
-        fadeTimer?.invalidate()
-        fadeTimer = nil
+        stopTicking()
         active = false
         visible = false
         window.orderOut(nil)
@@ -303,11 +316,62 @@ final class Overlay {
             view.isHidden = true
         }
         panelView.layer?.transform = CATransform3DIdentity
+        visibleDelta = 0
+    }
+
+    /// Starts, or wakes, the render loop.
+    private func resumeTicking() {
+        if let link = displayLink {
+            if link.isPaused { lastTick = 0; link.isPaused = false }
+            return
+        }
+        let link = stageView.displayLink(target: self, selector: #selector(tick))
+        // Must survive menu tracking and drags, like every other timed path here.
+        link.add(to: .main, forMode: .common)
+        lastTick = 0
+        displayLink = link
+    }
+
+    private func stopTicking() {
+        displayLink?.invalidate()
+        displayLink = nil
+        lastTick = 0
+        fadeStart = nil
+    }
+
+    @objc private func tick(_ link: CADisplayLink) {
+        let now = CACurrentMediaTime()
+        // A long gap means the loop was starved; clamp so it never lurches.
+        let dt = lastTick == 0 ? 1.0 / 60.0 : min(now - lastTick, 0.1)
+        lastTick = now
+
+        let remaining = delta - visibleDelta
+        var moved = false
+        if abs(remaining) > Self.settleEpsilon {
+            // Frame-rate independent exponential ease, so the motion is identical
+            // on 60 Hz and 120 Hz panels.
+            visibleDelta += remaining * (1 - exp(-dt / Self.smoothingTau))
+            moved = true
+        } else if visibleDelta != delta {
+            visibleDelta = delta
+            moved = true
+        }
+        if moved { applyFallbackTransform() }
+
+        if let start = fadeStart {
+            let progress = min(1, (now - start) / Self.fadeSeconds)
+            window.alphaValue = 1 - progress
+            if progress >= 1 { cancel() }
+            return
+        }
+
+        // Nothing left to animate; idle rather than burning a frame callback.
+        if !moved { link.isPaused = true }
     }
 
     private func applyFallbackTransform() {
         guard stageView.bounds.width > 0, stageView.bounds.height > 0 else { return }
-        // Every gradient below is rewritten at sensor rate. Implicit CALayer
+        // Every gradient below is rewritten every frame. Implicit CALayer
         // animations would each start a quarter-second interpolation, so the
         // blur bands would lag behind the panel they are supposed to be glued
         // to. Disable actions for the whole update.
@@ -322,9 +386,9 @@ final class Overlay {
         for mask in blurMasks { mask.frame = panelView.bounds }
         sideFadeLayer.frame = stageView.bounds
 
-        // `delta` is the calibrated visual range (±200°). Compress it into a
-        // bounded physical-looking bend while keeping the bottom edge fixed.
-        let progress = max(-1.0, min(1.0, delta / 200.0))
+        // `visibleDelta` is the eased calibrated visual range (±200°). Compress
+        // it into a bounded physical-looking bend, bottom edge fixed.
+        let progress = max(-1.0, min(1.0, visibleDelta / 200.0))
         // A full visual range bends by about 36°. This keeps a small physical
         // adjustment from reading like a near-closed lid.
         let radians = CGFloat(progress) * (.pi * 0.20)
@@ -349,7 +413,7 @@ final class Overlay {
         // entire blur ramp lands inside the travel that is actually visible.
         let closing = progress < 0
         let blurAmount = closing
-            ? CGFloat(min(1.0, abs(delta) / Self.closingBlurFullScale))
+            ? CGFloat(min(1.0, abs(visibleDelta) / Self.closingBlurFullScale))
             : amount
         for (level, mask) in blurMasks.enumerated() {
             let usable = level != Self.closingOnlyLevel || closing
