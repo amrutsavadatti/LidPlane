@@ -20,7 +20,7 @@ cd "$(dirname "$0")"
 
 IDENTITY_NAME="${1:-LidPlane Dev}"
 IDENTITY_FILE=".signing-identity"
-BUNDLE_ID="local.amrut.LidPlane"
+BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' Info.plist)"
 
 # Deliberately not `find-identity -v`. The -v flag lists only identities with a
 # trusted chain, and a self-signed root is never trusted — but codesign signs

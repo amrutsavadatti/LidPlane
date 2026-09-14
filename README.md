@@ -20,7 +20,7 @@ matching. The symptom is a permission prompt on every single lid movement. With
 a stable certificate the requirement becomes:
 
 ```
-identifier "local.amrut.LidPlane" and certificate leaf = H"…"
+identifier "com.amrutsavadatti.LidPlane" and certificate leaf = H"…"
 ```
 
 which survives rebuilds, so you approve the permission once.

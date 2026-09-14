@@ -93,9 +93,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     // MARK: - Popover
 
-    private func buildPopover() {
-        let content = NSView(frame: CGRect(x: 0, y: 0, width: 260, height: 88))
+    /// Fixed width; the height is whatever the content needs.
+    private static let popoverWidth: CGFloat = 260
 
+    private func buildPopover() {
         let title = NSTextField(labelWithString: "Lid effect")
         title.font = .systemFont(ofSize: 13, weight: .medium)
 
@@ -111,41 +112,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         titles.alignment = .leading
         titles.spacing = 2
 
-        let row = NSStackView(views: [titles, NSView(), effectSwitch])
+        // A spacer that yields its width so the switch is pushed to the edge.
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        spacer.setContentCompressionResistancePriority(.init(1), for: .horizontal)
+
+        let row = NSStackView(views: [titles, spacer, effectSwitch])
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 10
 
+        // Stacked vertically rather than beside the button: a wrapping sentence
+        // and a button side by side in 260pt leaves neither enough room.
+        let warning = NSTextField(wrappingLabelWithString:
+            "Screen Recording is blocked. Grant it, then switch the effect on again.")
+        warning.font = .systemFont(ofSize: 11)
+        warning.textColor = .secondaryLabelColor
+        // Without this the label reports a single-line height and the popover
+        // is sized too short for the text it actually draws.
+        warning.preferredMaxLayoutWidth = Self.popoverWidth - 28
         let fixButton = NSButton(title: "Open Settings", target: self, action: #selector(openCaptureSettings))
         fixButton.bezelStyle = .accessoryBarAction
         fixButton.controlSize = .small
-        let warning = NSTextField(wrappingLabelWithString: "Screen Recording is blocked. Grant it, then switch the effect on again.")
-        warning.font = .systemFont(ofSize: 11)
-        warning.textColor = .secondaryLabelColor
-        permissionRow.orientation = .horizontal
-        permissionRow.alignment = .centerY
-        permissionRow.spacing = 8
+        permissionRow.orientation = .vertical
+        permissionRow.alignment = .leading
+        permissionRow.spacing = 6
         permissionRow.setViews([warning, fixButton], in: .leading)
         permissionRow.isHidden = true
 
         let root = NSStackView(views: [row, permissionRow])
         root.orientation = .vertical
-        root.alignment = .leading
+        // .width makes every arranged subview span the popover, so the switch
+        // stays pinned right whether or not the warning is showing.
+        root.alignment = .width
         root.spacing = 10
+        root.edgeInsets = NSEdgeInsets(top: 14, left: 14, bottom: 14, right: 14)
         root.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(root)
-        NSLayoutConstraint.activate([
-            root.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 14),
-            root.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -14),
-            root.topAnchor.constraint(equalTo: content.topAnchor, constant: 14),
-            row.widthAnchor.constraint(equalTo: root.widthAnchor)
-        ])
+        root.widthAnchor.constraint(equalToConstant: Self.popoverWidth).isActive = true
+        // A hidden arranged subview must leave the layout entirely, or the
+        // popover keeps reserving space for the warning that is not drawn.
+        root.detachesHiddenViews = true
 
         let controller = NSViewController()
-        controller.view = content
+        controller.view = root
         popover.contentViewController = controller
         popover.behavior = .transient
         popover.delegate = self
+    }
+
+    /// The popover does not track its content, so the size is recomputed
+    /// whenever the permission row appears or disappears.
+    private func resizePopover() {
+        guard let view = popover.contentViewController?.view else { return }
+        view.layoutSubtreeIfNeeded()
+        let fitting = view.fittingSize
+        if popover.contentSize != fitting { popover.contentSize = fitting }
     }
 
     private func togglePopover() {
@@ -173,6 +194,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         // Dim the icon while the effect is off, so the menu bar reflects state
         // without needing a second glyph.
         item?.button?.appearsDisabled = !coordinator.enabled
+        resizePopover()
     }
 
     @objc private func toggleEffect() {

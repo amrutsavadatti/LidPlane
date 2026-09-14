@@ -7,6 +7,9 @@ if [ "${1:-}" = "--diagnostics" ]; then task_flags=(-D RENDER_TEST); fi
 xcrun swiftc -swift-version 5 -O ${task_flags[@]+"${task_flags[@]}"} -module-cache-path "$PWD/build/module-cache" \
     -target arm64-apple-macos14.0 Sources/*.swift \
     -o build/LidPlane.app/Contents/MacOS/LidPlane
+# Derived, never hardcoded: a codesign identifier that disagrees with
+# CFBundleIdentifier breaks TCC matching in ways that are hard to spot.
+BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' Info.plist)"
 cp Info.plist build/LidPlane.app/Contents/Info.plist
 cp Resources/Plane.metal build/LidPlane.app/Contents/Resources/Plane.metal
 cp Resources/AppIcon.icns build/LidPlane.app/Contents/Resources/AppIcon.icns
@@ -29,7 +32,7 @@ if [ -n "$IDENTITY" ] && ! security find-identity -p codesigning | grep -Fq "\"$
     IDENTITY="-"
 fi
 IDENTITY="${IDENTITY:--}"
-codesign --force --sign "$IDENTITY" --identifier local.amrut.LidPlane build/LidPlane.app
+codesign --force --sign "$IDENTITY" --identifier "$BUNDLE_ID" build/LidPlane.app
 if [ "$IDENTITY" = "-" ]; then
     printf 'Warning: ad-hoc signed. Screen Recording must be re-granted after every build.\n'
     printf '         Run ./setup-dev.sh once to fix this permanently.\n'
